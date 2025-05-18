@@ -15,14 +15,9 @@ import {
   Box,
   CircularProgress,
   Alert,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Grid,
   Tabs,
   Tab,
-  Divider,
 } from '@mui/material';
 import styled from '@emotion/styled';
 
@@ -73,25 +68,38 @@ const TabPanel = ({ children, value, index, ...other }) => (
 
 const Results = () => {
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [errors, setErrors] = useState({
+    sql: null,
+    xss: null,
+    cmd: null,
+    tech: null,
+    general: null
+  });
   const [results, setResults] = useState({
+    url: '',
+    scanDate: '',
     sql: null,
     xss: null,
     cmd: null,
     tech: null,
   });
   const [tabValue, setTabValue] = useState(0);
-  const { state } = useLocation();
+  const location = useLocation();
 
   useEffect(() => {
     const fetchResults = async () => {
-      if (!state?.url) {
-        setError('No URL provided. Please go back and enter a URL.');
+      const urlToScan = location?.state?.url;
+      
+      if (!urlToScan) {
+        console.error('No URL provided');
+        setErrors({ ...errors, general: 'No URL provided. Please go back and enter a URL.' });
         setLoading(false);
         return;
       }
 
-      const urlToScan = state.url;
+      console.log('Starting scan for URL:', urlToScan);
+      setResults(prev => ({ ...prev, url: urlToScan, scanDate: new Date().toLocaleString() }));
+      
       try {
         setLoading(true);
 
@@ -102,56 +110,141 @@ const Results = () => {
           tech: 'https://api.builtwith.com/v20/api.json',
         };
 
-        const [sqlResponse, xssResponse, cmdResponse, techResponse] = await Promise.all([
-          fetch(endpoints.sql, {
+        const handleFetchResponse = async (response, testType) => {
+          if (!response.ok) {
+            throw new Error(`${testType} scan failed with status: ${response.status}`);
+          }
+          const data = await response.json();
+          console.log(`${testType} scan result:`, data);
+          return data;
+        };
+
+        try {
+          console.log('Starting SQL injection scan for URL:', urlToScan);
+          const sqlResponse = await fetch(endpoints.sql, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: urlToScan, test: 'sql' }),
-          }),
-          fetch(endpoints.xss, {
+          });
+          
+          const sqlData = await handleFetchResponse(sqlResponse, 'SQL');
+          console.log('Raw SQL scan result:', sqlData);
+          
+          setResults(prev => ({ 
+            ...prev, 
+            sql: sqlData?.sql || sqlData || {} 
+          }));
+        } catch (err) {
+          console.error('SQL scan error:', err);
+          setErrors(prev => ({ ...prev, sql: err.toString() }));
+        }
+
+        try {
+          console.log('Starting XSS scan for URL:', urlToScan);
+          const xssResponse = await fetch(endpoints.xss, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: urlToScan, test: 'xss' }),
-          }),
-          fetch(endpoints.cmd, {
+          });
+          
+          const xssData = await handleFetchResponse(xssResponse, 'XSS');
+          console.log('Raw XSS scan result:', xssData);
+          
+          // Check if response is structured as expected
+          setResults(prev => ({ 
+            ...prev, 
+            xss: xssData?.xss || xssData || {} 
+          }));
+        } catch (err) {
+          console.error('XSS scan error:', err);
+          setErrors(prev => ({ ...prev, xss: err.toString() }));
+        }
+
+        // Command injection scan
+        try {
+          console.log('Starting Command injection scan for URL:', urlToScan);
+          const cmdResponse = await fetch(endpoints.cmd, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: urlToScan, test: 'cmd' }),
-          }),
-          fetch(`${endpoints.tech}?KEY=6e1308ca-4f44-4371-86c1-99ad2379bb04&LOOKUP=${urlToScan}`),
-        ]);
+          });
+          
+          const cmdData = await handleFetchResponse(cmdResponse, 'CMD');
+          console.log('Raw Command injection data:', cmdData);
+          
+          // Check if response is structured as expected
+          setResults(prev => ({ 
+            ...prev, 
+            cmd: cmdData?.cmd || cmdData || {} 
+          }));
+        } catch (err) {
+          console.error('Command injection scan error:', err);
+          setErrors(prev => ({ ...prev, cmd: err.toString() }));
+        }
+        
 
-        if (!sqlResponse.ok || !xssResponse.ok || !cmdResponse.ok || !techResponse.ok) {
-          throw new Error('One or more API requests failed');
+          try {
+            const techResponse = await fetch(`${endpoints.tech}?KEY=eee0cf86-0d0f-4bb0-afef-373a944b5a50&LOOKUP=${urlToScan}`);
+          const techData = await handleFetchResponse(techResponse, 'Technology');
+          console.log('Raw tech data:', techData);
+          
+          let processedTechData = {};
+          
+          if (techData && techData.Results && techData.Results.length > 0) {
+            const result = techData.Results[0];
+            
+            if (result.Result && result.Result.Paths && result.Result.Paths.length > 0) {
+              const pathData = result.Result.Paths[0];
+              
+              if (pathData.Technologies && pathData.Technologies.length > 0) {
+                // Group technologies by tag
+                pathData.Technologies.forEach(tech => {
+                  const tag = tech.Tag || 'other';
+                  if (!processedTechData[tag]) {
+                    processedTechData[tag] = [];
+                  }
+                  processedTechData[tag].push(tech.Name);
+                });
+                
+                console.log('Processed tech data:', processedTechData);
+              }
+            }
+          }
+          
+          setResults(prev => ({ 
+            ...prev, 
+            tech: processedTechData 
+          }));
+        } catch (err) {
+          console.error('Technology detection error:', err);
+          setErrors(prev => ({ ...prev, tech: err.toString() }));
         }
 
-        const [sqlData, xssData, cmdData, techData] = await Promise.all([
-          sqlResponse.json(),
-          xssResponse.json(),
-          cmdResponse.json(),
-          techResponse.json(),
-        ]);
-
-        setResults({
-          url: urlToScan,
-          scanDate: new Date().toLocaleString(),
-          sql: sqlData.sql || {},
-          xss: xssData.xss || {},
-          cmd: cmdData.cmd || {},
-          tech: techData || {},
-        });
-
-        setLoading(false);
+        console.log('All scans completed');
       } catch (err) {
-        setError(err.message || 'Failed to fetch scan results. Please try again.');
+        console.error('Overall scan error:', err);
+        setErrors(prev => ({ 
+          ...prev, 
+          general: 'An unexpected error occurred. Some results may be incomplete.' 
+        }));
+      } finally {
         setLoading(false);
       }
     };
 
     fetchResults();
-  }, [state]);
+  }, []); // Only run once on component mount
 
   const handleTabChange = (event, newValue) => setTabValue(newValue);
+
+  // Check if we have any results to display
+  const hasAnyResults = Boolean(
+    results.sql || results.xss || results.cmd || results.tech
+  );
+
+  // Debug output
+  console.log('Current results state:', results);
+  console.log('Current errors state:', errors);
 
   if (loading) {
     return (
@@ -175,11 +268,11 @@ const Results = () => {
     );
   }
 
-  if (error) {
+  if (errors.general && !hasAnyResults) {
     return (
       <Container>
         <Alert severity="error" sx={{ mt: 4 }}>
-          {error}
+          {errors.general}
         </Alert>
       </Container>
     );
@@ -203,6 +296,12 @@ const Results = () => {
             Scan completed: {results.scanDate}
           </Typography>
         </Box>
+
+        {errors.general && (
+          <Alert severity="warning" sx={{ mb: 4 }}>
+            {errors.general}
+          </Alert>
+        )}
 
         <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
           <Tabs 
@@ -228,7 +327,11 @@ const Results = () => {
               {results.sql?.status && <VulnerabilityChip status={results.sql.status} />}
             </Box>
             
-            {results.sql && (
+            {errors.sql ? (
+              <Alert severity="error" sx={{ mb: 3 }}>
+                Failed to get SQL injection results: {errors.sql}
+              </Alert>
+            ) : results.sql ? (
               <>
                 <StyledPaper elevation={3} sx={{ mb: 3 }}>
                   <Typography variant="h6" gutterBottom>System Information</Typography>
@@ -269,10 +372,14 @@ const Results = () => {
                       </Table>
                     </TableContainer>
                   </Box>
+                ) : results.sql.vulnerabilities === undefined ? (
+                  <Typography>Scan did not return vulnerability data</Typography>
                 ) : (
                   <Typography>No SQL injection vulnerabilities found</Typography>
                 )}
               </>
+            ) : (
+              <Typography>No SQL injection data available</Typography>
             )}
           </StyledPaper>
         </TabPanel>
@@ -285,7 +392,11 @@ const Results = () => {
               {results.xss?.status && <VulnerabilityChip status={results.xss.status} />}
             </Box>
             
-            {results.xss && (
+            {errors.xss ? (
+              <Alert severity="error" sx={{ mb: 3 }}>
+                Failed to get XSS vulnerability results: {errors.xss}
+              </Alert>
+            ) : results.xss ? (
               <>
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="h6" gutterBottom>Vulnerability Details</Typography>
@@ -317,6 +428,8 @@ const Results = () => {
                   ))}
                 </Grid>
               </>
+            ) : (
+              <Typography>No XSS vulnerability data available</Typography>
             )}
           </StyledPaper>
         </TabPanel>
@@ -329,7 +442,11 @@ const Results = () => {
               {results.cmd?.status && <VulnerabilityChip status={results.cmd.status} />}
             </Box>
 
-            {results.cmd && (
+            {errors.cmd ? (
+              <Alert severity="error" sx={{ mb: 3 }}>
+                Failed to get command injection results: {errors.cmd}
+              </Alert>
+            ) : results.cmd ? (
               <>
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="h6" gutterBottom>Details</Typography>
@@ -361,19 +478,23 @@ const Results = () => {
                   ))}
                 </Grid>
               </>
+            ) : (
+              <Typography>No command injection data available</Typography>
             )}
           </StyledPaper>
         </TabPanel>
 
-
-        {/* Technology Detection Results */}
         <TabPanel value={tabValue} index={3}>
           <StyledPaper elevation={3}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
               <Typography variant="h5">Technology Stack Analysis</Typography>
             </Box>
 
-            {results.tech && (
+            {errors.tech ? (
+              <Alert severity="error" sx={{ mb: 3 }}>
+                Failed to get technology detection results: {errors.tech}
+              </Alert>
+            ) : results.tech && Object.keys(results.tech).length > 0 ? (
               <Grid container spacing={3}>
                 {Object.entries(results.tech).map(([category, items], index) => (
                   items && items.length > 0 && (
@@ -399,6 +520,19 @@ const Results = () => {
                   )
                 ))}
               </Grid>
+            ) : (
+              <Box sx={{ py: 3 }}>
+                <Typography variant="body1">
+                  No technology detection data available or still loading.
+                </Typography>
+                {/* Debug info */}
+                <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(0,0,0,0.05)', borderRadius: 1 }}>
+                  <Typography variant="subtitle2" gutterBottom>Debug Information:</Typography>
+                  <Typography variant="body2">
+                    If you're expecting data, please check the browser console for raw API responses.
+                  </Typography>
+                </Box>
+              </Box>
             )}
           </StyledPaper>
         </TabPanel>
@@ -408,16 +542,28 @@ const Results = () => {
           <StyledPaper elevation={3}>
             <Typography variant="h5" gutterBottom>Scan Summary</Typography>
 
+            {Object.values(errors).some(Boolean) && (
+              <Alert severity="warning" sx={{ mb: 3 }}>
+                Some scan results are incomplete or unavailable. Please check individual tabs for details.
+              </Alert>
+            )}
+
             <Grid container spacing={3}>
               {[
-                { label: 'SQL Injection', status: results.sql?.status },
-                { label: 'XSS Vulnerability', status: results.xss?.status },
-                { label: 'Command Injection', status: results.cmd?.status }
+                { label: 'SQL Injection', status: results.sql?.status, error: errors.sql },
+                { label: 'XSS Vulnerability', status: results.xss?.status, error: errors.xss },
+                { label: 'Command Injection', status: results.cmd?.status, error: errors.cmd }
               ].map((test, index) => (
                 <Grid item xs={12} sm={4} key={index}>
                   <StyledPaper elevation={3}>
                     <Typography variant="h6" gutterBottom>{test.label}</Typography>
-                    {test.status && <VulnerabilityChip status={test.status} />}
+                    {test.error ? (
+                      <Chip label="Scan Failed" sx={{ bgcolor: '#ff9800', color: '#fff' }} />
+                    ) : test.status ? (
+                      <VulnerabilityChip status={test.status} />
+                    ) : (
+                      <Chip label="No Data" sx={{ bgcolor: '#9e9e9e', color: '#fff' }} />
+                    )}
                   </StyledPaper>
                 </Grid>
               ))}
@@ -425,11 +571,17 @@ const Results = () => {
 
             <Box sx={{ mt: 4 }}>
               <Typography variant="h6" gutterBottom>Overall Security Status</Typography>
-              <Typography color="text.secondary">
-                {Object.values(results).some(result => result?.status === 'vulnerable')
-                  ? 'Vulnerabilities detected. Please review the detailed reports for each test.'
-                  : 'No critical vulnerabilities detected. Continue monitoring and maintaining security best practices.'}
-              </Typography>
+              {hasAnyResults ? (
+                <Typography color="text.secondary">
+                  {Object.values(results).some(result => result?.status === 'vulnerable')
+                    ? 'Vulnerabilities detected. Please review the detailed reports for each test.'
+                    : 'No critical vulnerabilities detected in completed scans. Continue monitoring and maintaining security best practices.'}
+                </Typography>
+              ) : (
+                <Typography color="text.secondary">
+                  Unable to determine security status due to scan failures.
+                </Typography>
+              )}
             </Box>
           </StyledPaper>
         </TabPanel>
