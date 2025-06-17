@@ -58,15 +58,27 @@ const VulnerabilityChip = ({ status }) => {
   );
 };
 
+// Modified TabPanel to render all children, but hide inactive ones with CSS
+// This allows html2canvas to capture all content by temporarily making it visible
 const TabPanel = ({ children, value, index, ...other }) => (
   <div
     role="tabpanel"
-    hidden={value !== index}
+    hidden={value !== index} // Keep for normal UI behavior (hides non-active tab content)
     id={`scan-tabpanel-${index}`}
     aria-labelledby={`scan-tab-${index}`}
     {...other}
+    className="pdf-tab-panel" // Add class for easy selection during PDF generation
   >
+    {/* Always render children for the active tab */}
     {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
+    
+    {/* Render children for inactive tabs but hide them with CSS.
+        This content will be made visible for PDF generation. */}
+    {value !== index && (
+      <Box sx={{ p: 3, display: 'none' }} className="pdf-hidden-content-wrapper">
+        {children}
+      </Box>
+    )}
   </div>
 );
 
@@ -246,33 +258,63 @@ const Results = () => {
   const handleDownloadPdf = async () => {
     const input = document.getElementById('scan-results-content'); // Get the element to print
     if (input) {
-      // Temporarily set a wider width for better PDF rendering of tables
-      input.style.width = 'fit-content';
+      // Temporarily reveal all hidden tab content for PDF generation
+      const hiddenContentWrappers = input.querySelectorAll('.pdf-hidden-content-wrapper');
+      hiddenContentWrappers.forEach(el => {
+        el.style.display = 'block'; // Make it visible
+      });
+      
+      // Temporarily remove hidden attribute from TabPanel divs.
+      // The `hidden` attribute completely removes the element from rendering,
+      // so html2canvas can't see it.
+      const tabPanelDivs = input.querySelectorAll('.pdf-tab-panel');
+      tabPanelDivs.forEach(el => {
+        el.removeAttribute('hidden');
+      });
+
+      // Optionally set a wider width for better PDF rendering of tables
+      // html2canvas works best with content that fits on a standard "page" width
+      input.style.width = 'fit-content'; // Or a fixed width like '1000px'
       
       const canvas = await html2canvas(input, {
         scale: 2, // Increase scale for better resolution
-        logging: true,
-        useCORS: true,
+        logging: true, // Enable logging for debugging html2canvas issues
+        useCORS: true, // Enable cross-origin resource loading for images etc.
       });
 
       const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdf = new jsPDF('p', 'mm', 'a4'); // 'p' for portrait, 'mm' for millimeters, 'a4' for A4 size
       const imgWidth = 210; // A4 width in mm
       const pageHeight = 297; // A4 height in mm
-      const imgHeight = canvas.height * imgWidth / canvas.width;
+      const imgHeight = canvas.height * imgWidth / canvas.width; // Calculate image height to maintain aspect ratio
       let heightLeft = imgHeight;
-      let position = 0;
+      let position = 0; // Current position on the PDF page
 
+      // Add the first page
       pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
       heightLeft -= pageHeight;
 
+      // Add more pages if content exceeds one A4 page
       while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
+        position = heightLeft - imgHeight; // Calculate position for next page
+        pdf.addPage(); // Add a new page
         pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
         heightLeft -= pageHeight;
       }
+      // Save the PDF file
       pdf.save(`VulneraScan_Report_${results.url.replace(/[^a-z0-9]/gi, '_')}_${new Date().toISOString().slice(0,10)}.pdf`);
+
+      // Revert visibility changes after PDF generation to restore UI state
+      hiddenContentWrappers.forEach(el => {
+        el.style.display = 'none'; // Hide it again
+      });
+      tabPanelDivs.forEach(el => {
+        // Re-add hidden attribute based on the current tab value
+        // Only re-hide the tabs that are not currently active
+        if (parseInt(el.id.replace('scan-tabpanel-', '')) !== tabValue) {
+          el.setAttribute('hidden', '');
+        }
+      });
 
       // Reset the width after generating PDF
       input.style.width = ''; 
@@ -348,7 +390,7 @@ const Results = () => {
           </Alert>
         )}
 
-        {/* This div will be captured for the PDF */}
+        {/* This div will be captured for the PDF. It wraps all tabs and their content. */}
         <div id="scan-results-content" style={{ background: 'linear-gradient(145deg, rgba(26, 26, 26, 0.9) 0%, rgba(26, 26, 26, 0.6) 100%)', padding: '20px', borderRadius: '8px' }}>
           <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
             <Tabs 
